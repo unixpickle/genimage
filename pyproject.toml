@@ -1,0 +1,33 @@
+[project]
+name = "genimage"
+version = "0.1.0"
+description = "A persistent local Qwen-Image generation queue for Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.116.0",
+    "huggingface-hub>=0.34.0",
+    "mflux>=0.18.0",
+    "pillow>=11.3.0",
+    "python-multipart>=0.0.20",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.4.1",
+]
+
+[project.scripts]
+genimage = "genimage.server:main"
+genimage-worker = "genimage.worker:main"
+genimage-download-model = "genimage.download_model:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

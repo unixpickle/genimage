@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#11110f">
+  <title>Qwen Image Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
+      <div>
+        <h1>Qwen Image Studio</h1>
+        <p>Local generation on Apple Silicon</p>
+      </div>
+    </div>
+    <div id="worker-status" class="worker-status"><i></i><span>Connecting…</span></div>
+  </header>
+
+  <main>
+    <section class="composer panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">New generation</p>
+          <h2>Describe an image</h2>
+        </div>
+        <span class="shortcut">⌘ Enter</span>
+      </div>
+
+      <form id="generation-form">
+        <label class="field prompt-field">
+          <span>Prompt</span>
+          <textarea name="prompt" id="prompt" rows="5" maxlength="8000" required autofocus placeholder="A quiet reading room carved into a cliff, late-afternoon light, intricate architectural photography…"></textarea>
+        </label>
+
+        <div class="form-grid">
+          <label class="field">
+            <span>Canvas</span>
+            <select id="aspect-ratio">
+              <option value="512x512">Compact · 512 × 512</option>
+              <option value="1328x1328">Square · 1:1</option>
+              <option value="1664x928">Landscape · 16:9</option>
+              <option value="928x1664">Portrait · 9:16</option>
+              <option value="1472x1104">Landscape · 4:3</option>
+              <option value="1104x1472">Portrait · 3:4</option>
+              <option value="1584x1056">Landscape · 3:2</option>
+              <option value="1056x1584">Portrait · 2:3</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Steps</span>
+            <div class="range-wrap">
+              <input type="range" name="steps" id="steps" min="1" max="50" value="20">
+              <output for="steps" id="steps-output">20</output>
+            </div>
+          </label>
+        </div>
+
+        <div id="custom-size" class="custom-size" hidden>
+          <label class="field"><span>Width</span><input type="number" name="width" id="width" value="512" min="256" max="2048" step="16"></label>
+          <span>×</span>
+          <label class="field"><span>Height</span><input type="number" name="height" id="height" value="512" min="256" max="2048" step="16"></label>
+        </div>
+
+        <details class="advanced">
+          <summary>Advanced controls <span>Seed, guidance, negative prompt, image-to-image</span></summary>
+          <div class="advanced-body">
+            <label class="field">
+              <span>Negative prompt</span>
+              <textarea name="negative_prompt" rows="2" maxlength="8000" placeholder="blurry, low quality, watermark…"></textarea>
+            </label>
+            <div class="form-grid three">
+              <label class="field">
+                <span>Guidance</span>
+                <input type="number" name="guidance" value="4" min="0" max="20" step="0.1">
+              </label>
+              <label class="field">
+                <span>Seed</span>
+                <input type="number" name="seed" id="seed" value="42" min="0" max="4294967295">
+              </label>
+              <label class="check-field">
+                <input type="checkbox" id="random-seed" checked>
+                <span>Randomize seed</span>
+              </label>
+            </div>
+            <div class="form-grid">
+              <label class="field file-field">
+                <span>Initial image <small>optional</small></span>
+                <input type="file" name="input_image" id="input-image" accept="image/*">
+                <span class="file-picker">
+                  <span class="file-button" id="file-label">Choose an image</span>
+                  <button class="clear-file" id="clear-input" type="button" hidden>Clear</button>
+                </span>
+              </label>
+              <label class="field" id="strength-field">
+                <span>Image strength</span>
+                <div class="range-wrap">
+                  <input type="range" name="image_strength" id="image-strength" min="0" max="1" step="0.05" value="0.75">
+                  <output for="image-strength" id="strength-output">0.75</output>
+                </div>
+              </label>
+            </div>
+            <details class="expert">
+              <summary>Expert options</summary>
+              <div class="form-grid three">
+                <label class="field"><span>Scheduler</span><select name="scheduler"><option value="linear">Linear</option></select></label>
+                <label class="check-field"><input type="checkbox" name="pid_decode" value="true"><span>PiD decode</span></label>
+                <label class="field"><span>PiD degrade sigma</span><input type="number" name="pid_degrade_sigma" value="0" min="0" max="1" step="0.01"></label>
+              </div>
+            </details>
+          </div>
+        </details>
+
+        <div class="submit-row">
+          <p id="form-message" role="status"></p>
+          <button class="primary-button" type="submit"><span>Queue generation</span><b>→</b></button>
+        </div>
+      </form>
+    </section>
+
+    <section class="queue-section panel">
+      <div class="section-heading compact">
+        <div>
+          <p class="eyebrow">Generation daemon</p>
+          <h2>Queue <span id="queue-count" class="count">0</span></h2>
+        </div>
+      </div>
+      <div id="queue" class="queue-list"></div>
+      <div id="queue-empty" class="empty-state small">
+        <div class="empty-icon">↳</div>
+        <p>The queue is clear.</p>
+      </div>
+    </section>
+
+    <section class="history-section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">On this machine</p>
+          <h2>Existing generations <span id="history-count" class="count">0</span></h2>
+        </div>
+        <button id="refresh-button" class="quiet-button" type="button">Refresh</button>
+      </div>
+      <div id="history" class="gallery"></div>
+      <div id="history-empty" class="empty-state">
+        <div class="empty-orbit"><span></span></div>
+        <h3>Your images will live here</h3>
+        <p>Completed generations persist across restarts until you delete them.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="job-dialog">
+    <button class="dialog-close" type="button" aria-label="Close">×</button>
+    <div id="dialog-content"></div>
+  </dialog>
+
+  <template id="queue-template">
+    <article class="queue-item">
+      <div class="queue-position"></div>
+      <div class="queue-copy">
+        <div class="queue-topline"><span class="status-pill"></span><time></time></div>
+        <p class="queue-prompt"></p>
+        <div class="progress-track"><span></span></div>
+        <p class="queue-meta"></p>
+      </div>
+      <div class="queue-actions"></div>
+    </article>
+  </template>
+
+  <template id="card-template">
+    <article class="generation-card">
+      <button class="image-button" type="button"><div class="image-shell"></div></button>
+      <div class="card-copy">
+        <p class="card-prompt"></p>
+        <div class="card-meta"><span></span><time></time></div>
+        <div class="card-actions"></div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
