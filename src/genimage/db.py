@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -65,6 +66,16 @@ class Database:
         self.settings.create_directories()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+            for name, definition in {
+                "mode": "TEXT NOT NULL DEFAULT 'generate'",
+                "reference_paths": "TEXT NOT NULL DEFAULT '[]'",
+                # Retain legacy inpainting attachments for history and cleanup.
+                "mask_path": "TEXT",
+                "mask_feather": "REAL NOT NULL DEFAULT 0.0",
+            }.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -269,8 +280,10 @@ class Database:
 
     @staticmethod
     def _remove_job_files(job: dict[str, Any]) -> None:
-        for key in ("input_path", "output_path"):
-            if value := job.get(key):
+        paths = [job.get(key) for key in ("input_path", "output_path", "mask_path")]
+        paths.extend(json.loads(job.get("reference_paths") or "[]"))
+        for value in paths:
+            if value:
                 try:
                     Path(value).unlink(missing_ok=True)
                 except OSError:

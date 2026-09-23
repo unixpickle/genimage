@@ -5,11 +5,15 @@ description = "A persistent local Qwen-Image generation queue for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "accelerate>=1.12",
+    "diffusers",
     "fastapi>=0.116.0",
     "huggingface-hub>=0.34.0",
-    "mflux>=0.18.0",
+    "mflux>=0.19.2",
     "pillow>=11.3.0",
     "python-multipart>=0.0.20",
+    "torchvision>=0.29.0",
+    "transformers>=5.17",
     "uvicorn[standard]>=0.35.0",
 ]
 
@@ -31,3 +35,6 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.uv.sources]
+mflux = { git = "https://github.com/mflux-community/mflux", rev = "8c00dab2505a96019df9d30bc9c223bf20d733c4" }
+diffusers = { git = "https://github.com/huggingface/diffusers", rev = "80c7ed262aeffbeb43ef13ae04baeb9b84515a69" }

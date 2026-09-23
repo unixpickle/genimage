@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import gc
 import logging
 import os
 import signal
@@ -39,24 +40,54 @@ class JobProgress:
             raise GenerationCancelled
 
 
-def load_model(settings: Settings):
+def load_model(settings: Settings, *, editing: bool = False):
     if not checkpoint_ready(settings.model_dir):
         raise FileNotFoundError(
             f"Checkpoint not found at {settings.model_dir}. Run `uv run genimage-download-model`."
         )
+    if editing:
+        from .editing import load_edit_model
+
+        return load_edit_model(settings)
     import mlx.core as mx
     from mflux.models.common.config import ModelConfig
-    from mflux.models.qwen.variants.txt2img.qwen_image import QwenImage
 
     # Bound the reusable Metal allocation cache while retaining the model itself.
     mx.set_cache_limit(8_000_000_000)
+    if settings.model_variant == "2.1":
+        from mflux.models.qwen21.variants.txt2img.qwen_image_21 import QwenImage21
+
+        return QwenImage21(model_path=str(settings.model_dir), model_config=ModelConfig.qwen_image_21())
+    from mflux.models.qwen.variants.txt2img.qwen_image import QwenImage
+
     return QwenImage(model_path=str(settings.model_dir), model_config=ModelConfig.qwen_image())
 
 
 def generate(model, db: Database, job: dict[str, Any], output_path: Path) -> None:
+    if job.get("mode") == "inpaint":
+        raise ValueError("Inpainting is no longer supported. Use Edit mode.")
     callback = JobProgress(db, job["id"], job["steps"])
+    if job.get("mode") in {"edit", "reference"}:
+        from .editing import generate_edit
+
+        def on_step(_pipe, step, _timestep, kwargs):
+            callback.call_in_loop(t=step)
+            return kwargs
+
+        if db.update_progress(job["id"], 0, job["steps"], "Encoding references"):
+            raise GenerationCancelled
+        image = generate_edit(model, job, on_step)
+        if db.update_progress(job["id"], job["steps"], job["steps"], "Saving"):
+            raise GenerationCancelled
+        image.save(output_path, format="PNG")
+        return
     model.callbacks.register(callback)
     try:
+        extra = {}
+        if db.settings.model_variant == "2512":
+            extra = {"pid_decode": bool(job["pid_decode"]), "pid_degrade_sigma": job["pid_degrade_sigma"]}
+        elif job["pid_decode"] or job["pid_degrade_sigma"]:
+            raise ValueError("PiD decoding is not supported by Qwen Image 2.1")
         image = model.generate_image(
             seed=job["seed"],
             prompt=job["prompt"],
@@ -68,8 +99,7 @@ def generate(model, db: Database, job: dict[str, Any], output_path: Path) -> Non
             image_path=job["input_path"],
             image_strength=job["image_strength"],
             num_inference_steps=job["steps"],
-            pid_decode=bool(job["pid_decode"]),
-            pid_degrade_sigma=job["pid_degrade_sigma"],
+            **extra,
         )
         if db.is_cancel_requested(job["id"]):
             raise GenerationCancelled
@@ -126,6 +156,7 @@ def run_worker(settings: Settings) -> int:
     heartbeat_thread = threading.Thread(target=heartbeat, name="worker-heartbeat", daemon=True)
     heartbeat_thread.start()
     model = None
+    model_backend = None
     model_status = "Not loaded"
     model_error = None
 
@@ -145,11 +176,24 @@ def run_worker(settings: Settings) -> int:
             output_path = settings.output_dir / f"{job_id}.png"
             temp_path.unlink(missing_ok=True)
             try:
+                if job.get("mode") == "inpaint":
+                    raise ValueError("Inpainting is no longer supported. Use Edit mode.")
+                backend = "edit" if job.get("mode") in {"edit", "reference"} else "mlx"
+                if model is not None and model_backend != backend:
+                    # The two runtimes share unified memory; keep only one model resident.
+                    model = None
+                    gc.collect()
+                    import mlx.core as mx
+                    import torch
+
+                    mx.clear_cache()
+                    torch.mps.empty_cache()
                 if model is None:
                     db.update_progress(job_id, 0, job["steps"], "Loading checkpoint")
                     model_status = "Loading"
                     db.set_worker_state(pid=pid, current_job_id=job_id, model_status=model_status)
-                    model = load_model(settings)
+                    model = load_model(settings, editing=backend == "edit")
+                    model_backend = backend
                     model_status = "Ready"
                     model_error = None
                     db.set_worker_state(pid=pid, current_job_id=job_id, model_status=model_status)
@@ -196,6 +240,10 @@ def run_worker(settings: Settings) -> int:
                     import mlx.core as mx
 
                     mx.clear_cache()
+                    if model_backend == "edit":
+                        import torch
+
+                        torch.mps.empty_cache()
                 except ImportError:
                     pass
                 db.set_worker_state(

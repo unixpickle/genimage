@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -92,3 +94,37 @@ def test_static_ui_is_served(tmp_path):
         response = client.get("/")
     assert response.status_code == 200
     assert "Qwen Image Studio" in response.text
+
+
+@pytest.mark.parametrize("variant, steps, guidance", [("2.1", 40, 1.0), ("2512", 20, 4.0)])
+def test_model_defaults_and_pid_validation(tmp_path, variant, steps, guidance):
+    settings = replace(settings_for(tmp_path), model_variant=variant)
+    with TestClient(create_app(settings)) as client:
+        model = client.get("/api/state").json()["model"]
+        assert model["variant"] == variant
+        assert model["supports_pid"] == (variant == "2512")
+        job = client.post("/api/jobs", data={"prompt": "a fox"}).json()
+        assert (job["steps"], job["guidance"]) == (steps, guidance)
+        for option in ({"pid_decode": "true"}, {"pid_degrade_sigma": "0.2"}):
+            response = client.post("/api/jobs", data={"prompt": "a fox", **option})
+            assert response.status_code == (422 if variant == "2.1" else 201)
+
+
+def test_worker_receives_app_settings(tmp_path, monkeypatch):
+    settings = replace(settings_for(tmp_path), disable_worker=False, model_variant="2512")
+    calls = []
+
+    class Process:
+        def __init__(self, *args, **kwargs):
+            calls.append(kwargs)
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr("genimage.server.subprocess.Popen", Process)
+    with TestClient(create_app(settings)):
+        pass
+    env = calls[0]["env"]
+    assert env["GENIMAGE_MODEL"] == "2512"
+    assert env["GENIMAGE_MODEL_DIR"] == str(settings.model_dir)
+    assert env["GENIMAGE_DATA_DIR"] == str(settings.data_dir)

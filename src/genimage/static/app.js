@@ -8,6 +8,11 @@ const historyEl = document.querySelector('#history');
 const dialog = document.querySelector('#job-dialog');
 let state = { queue: [], history: [], worker: {}, model: {} };
 let polling = false;
+let modelConfigured = false;
+const editedDefaults = new Set();
+for (const name of ['steps', 'guidance']) {
+  form.elements[name].addEventListener('input', () => editedDefaults.add(name));
+}
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const relativeTime = seconds => {
@@ -25,6 +30,45 @@ function button(label, className, action, title = '') {
   el.type = 'button'; el.className = className; el.textContent = label; el.title = title;
   el.addEventListener('click', action);
   return el;
+}
+
+function setCanvasSize(width, height) {
+  widthInput.value = width; heightInput.value = height;
+  const preset = `${width}x${height}`;
+  aspect.value = [...aspect.options].some(option => option.value === preset) ? preset : 'custom';
+  customSize.hidden = aspect.value !== 'custom';
+}
+
+function randomizeSeed() {
+  document.querySelector('#random-seed').checked = true;
+  form.elements.seed.value = '';
+  form.elements.seed.disabled = true;
+}
+
+function focusComposer() {
+  dialog.close();
+  form.scrollIntoView({ behavior: 'smooth' });
+  form.elements.prompt.focus();
+}
+
+async function reuseJob(job) {
+  const message = document.querySelector('#form-message');
+  try {
+    await window.imageEditor.restoreJob(job);
+    form.elements.prompt.value = job.prompt;
+    form.elements.negative_prompt.value = job.negative_prompt || '';
+    setCanvasSize(job.width, job.height);
+    for (const name of ['steps', 'guidance', 'scheduler']) form.elements[name].value = job[name];
+    for (const name of ['steps', 'guidance']) editedDefaults.add(name);
+    form.elements.image_strength.value = job.image_strength ?? 0.75;
+    form.elements.pid_decode.checked = Boolean(job.pid_decode) && Boolean(state.model.supports_pid);
+    form.elements.pid_degrade_sigma.value = state.model.supports_pid ? (job.pid_degrade_sigma ?? 0) : 0;
+    document.querySelector('#steps-output').textContent = form.elements.steps.value;
+    document.querySelector('#strength-output').textContent = Number(form.elements.image_strength.value).toFixed(2);
+    randomizeSeed();
+    message.className = ''; message.textContent = 'Settings restored. A new random seed will be used.';
+    focusComposer();
+  } catch (error) { message.className = 'error'; message.textContent = error.message; }
 }
 
 async function request(url, options = {}) {
@@ -110,20 +154,43 @@ function renderHistory() {
       imageButton.style.cursor = 'pointer'; imageButton.addEventListener('click', () => showDetails(job));
     }
     node.querySelector('.card-prompt').textContent = job.prompt;
-    node.querySelector('.card-meta span').textContent = job.status === 'completed' ? `${job.width} × ${job.height}` : job.status;
+    node.querySelector('.card-meta span').textContent = job.status === 'completed' ? (job.mode === 'inpaint' ? 'Original size · Inpaint' : `${job.width} × ${job.height}`) : job.status;
     node.querySelector('.card-meta time').textContent = relativeTime(job.finished_at || job.updated_at);
     const actions = node.querySelector('.card-actions');
     if (job.status === 'completed') {
       const download = document.createElement('a'); download.className = 'text-button'; download.href = job.download_url; download.textContent = 'Download';
       actions.append(download);
+      if (state.model.supports_editing) {
+        for (const [label, mode] of [['Edit', 'edit'], ['Reference', 'reference']]) {
+          actions.append(button(label, 'text-button', () => window.imageEditor.useJob(job, mode)));
+        }
+      }
     }
+    if (job.mode !== 'inpaint') actions.append(button('Reuse settings', 'text-button', () => reuseJob(job), 'Copy prompt and inputs with a new random seed'));
     actions.append(button('Details', 'text-button', () => showDetails(job)));
     actions.append(button('Delete', 'text-button delete', () => deleteJob(job, true)));
     historyEl.append(node);
   });
 }
 
-function render() { renderWorker(); renderQueue(); renderHistory(); }
+function renderModel() {
+  window.imageEditor?.setSupported(state.model.supports_editing);
+  document.querySelector('#model-label').textContent = `Qwen Image ${state.model.variant} · Local generation on Apple Silicon`;
+  if (!modelConfigured) {
+    if (!editedDefaults.has('steps')) {
+      form.elements.steps.value = state.model.default_steps;
+      document.querySelector('#steps-output').textContent = state.model.default_steps;
+    }
+    if (!editedDefaults.has('guidance')) form.elements.guidance.value = state.model.default_guidance;
+    modelConfigured = true;
+  }
+  for (const name of ['pid_decode', 'pid_degrade_sigma']) {
+    form.elements[name].disabled = !state.model.supports_pid;
+    form.elements[name].closest('label').hidden = !state.model.supports_pid;
+  }
+}
+
+function render() { renderModel(); renderWorker(); renderQueue(); renderHistory(); }
 
 async function cancelJob(id) {
   try { await request(`/api/jobs/${id}/cancel`, { method: 'POST' }); await refresh(); }
@@ -141,22 +208,26 @@ function showDetails(job) {
   const media = [];
   if (job.image_url) media.push(`<figure><figcaption>Generated</figcaption><img class="dialog-image" src="${job.image_url}" alt="${escapeHtml(job.prompt)}"></figure>`);
   if (job.input_image_url) media.push(`<figure><figcaption>Initial image</figcaption><img class="dialog-image" src="${job.input_image_url}" alt="Initial image for ${escapeHtml(job.prompt)}"></figure>`);
+  for (const [index, url] of (job.reference_image_urls || []).entries()) media.push(`<figure><figcaption>Reference ${index + 1}</figcaption><img class="dialog-image" src="${url}" alt="Reference ${index + 1}"></figure>`);
+  if (job.mask_image_url) media.push(`<figure><figcaption>Mask · white edits</figcaption><img class="dialog-image" src="${job.mask_image_url}" alt="Inpainting mask"></figure>`);
   content.innerHTML = `
     ${media.length ? `<div class="dialog-media">${media.join('')}</div>` : ''}
     <div class="dialog-details">
       <h3>${escapeHtml(job.prompt)}</h3>
       <div class="detail-grid">
         <div><small>Status</small><span>${escapeHtml(job.stage || job.status)}</span></div>
-        <div><small>Canvas</small><span>${job.width} × ${job.height}</span></div>
+        <div><small>Mode</small><span>${escapeHtml(job.mode || 'generate')}</span></div>
+        <div><small>${job.mode === 'inpaint' ? 'Generation resolution' : 'Canvas'}</small><span>${job.width} × ${job.height}</span></div>
         <div><small>Steps</small><span>${job.steps}</span></div>
         <div><small>Guidance</small><span>${job.guidance}</span></div>
         <div><small>Seed</small><span>${job.seed}</span></div>
         <div><small>Scheduler</small><span>${escapeHtml(job.scheduler)}</span></div>
-        ${job.has_input ? `<div><small>Image strength</small><span>${job.image_strength}</span></div>` : ''}
+        ${job.image_strength != null ? `<div><small>Image strength</small><span>${job.image_strength}</span></div>` : ''}
         ${job.pid_decode ? `<div><small>PiD decode</small><span>On · σ ${job.pid_degrade_sigma}</span></div>` : ''}
       </div>
       ${job.negative_prompt ? `<p class="negative"><strong>Negative prompt:</strong> ${escapeHtml(job.negative_prompt)}</p>` : ''}
     </div>`;
+  if (job.mode !== 'inpaint') content.append(button('Reuse settings', 'quiet-button', () => reuseJob(job), 'Copy prompt and inputs with a new random seed'));
   dialog.showModal();
 }
 
@@ -188,20 +259,25 @@ dialog.addEventListener('click', event => { if (event.target === dialog) dialog.
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
-  const submit = form.querySelector('button[type="submit"]');
+  const submits = form.querySelectorAll('button[type="submit"]');
+  if ([...submits].some(submit => submit.disabled)) return;
+  const keepPrompt = event.submitter?.id === 'queue-keep-prompt';
   const message = document.querySelector('#form-message');
-  submit.disabled = true; message.className = ''; message.textContent = 'Adding to queue…';
+  submits.forEach(submit => { submit.disabled = true; });
+  message.className = ''; message.textContent = 'Adding to queue…';
   const data = new FormData(form);
   data.set('width', widthInput.value); data.set('height', heightInput.value);
   if (document.querySelector('#random-seed').checked) data.delete('seed');
   if (!document.querySelector('#input-image').files.length) data.delete('input_image');
   if (!data.has('pid_decode')) data.set('pid_decode', 'false');
   try {
+    await window.imageEditor.appendTo(data);
     await request('/api/jobs', { method: 'POST', body: data });
-    message.textContent = 'Queued.'; form.querySelector('#prompt').value = '';
+    message.textContent = 'Queued.';
+    if (!keepPrompt) form.querySelector('#prompt').value = '';
     await refresh(); setTimeout(() => { if (message.textContent === 'Queued.') message.textContent = ''; }, 1800);
   } catch (error) { message.className = 'error'; message.textContent = error.message; }
-  finally { submit.disabled = false; }
+  finally { submits.forEach(submit => { submit.disabled = false; }); }
 });
 
 document.addEventListener('keydown', event => {

@@ -13,7 +13,7 @@
       <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
       <div>
         <h1>Qwen Image Studio</h1>
-        <p>Local generation on Apple Silicon</p>
+        <p id="model-label">Local generation on Apple Silicon</p>
       </div>
     </div>
     <div id="worker-status" class="worker-status"><i></i><span>Connecting…</span></div>
@@ -30,11 +30,49 @@
       </div>
 
       <form id="generation-form">
+        <label class="field mode-field">
+          <span>Mode</span>
+          <select name="mode" id="generation-mode">
+            <option value="generate">Text to image</option>
+            <option value="edit">Edit an image</option>
+            <option value="reference">Generate from references</option>
+            <option value="img2img">Image variation</option>
+          </select>
+        </label>
+        <p id="mode-help" class="field-help">Describe the image you want to create.</p>
         <label class="field prompt-field">
           <span>Prompt</span>
           <textarea name="prompt" id="prompt" rows="5" maxlength="8000" required autofocus placeholder="A quiet reading room carved into a cliff, late-afternoon light, intricate architectural photography…"></textarea>
         </label>
 
+        <div class="form-grid" id="source-controls" hidden>
+          <label class="field file-field">
+            <span id="source-label">Source image</span>
+            <input type="file" name="input_image" id="input-image" accept="image/*">
+            <span class="file-picker">
+              <span class="file-button" id="file-label">Choose an image</span>
+              <button class="clear-file" id="clear-input" type="button" hidden>Clear</button>
+            </span>
+          </label>
+          <label class="field" id="strength-field">
+            <span>Image strength</span>
+            <div class="range-wrap">
+              <input type="range" name="image_strength" id="image-strength" min="0" max="1" step="0.05" value="0.75">
+              <output for="image-strength" id="strength-output">0.75</output>
+            </div>
+          </label>
+          <img id="source-thumbnail" alt="Source image" hidden>
+        </div>
+
+        <section id="reference-controls" class="image-tools" hidden>
+          <div class="tool-heading">
+            <span>Reference images <small id="reference-limit">up to 10</small></span>
+            <button type="button" id="add-references" class="quiet-button">Add images</button>
+          </div>
+          <input type="file" id="reference-images" accept="image/*" multiple aria-label="Add reference images">
+          <p class="field-help">Use image numbers in your prompt to describe how each reference should be used.</p>
+          <div id="reference-previews" class="reference-previews"></div>
+        </section>
         <div class="form-grid">
           <label class="field">
             <span>Canvas</span>
@@ -53,8 +91,8 @@
           <label class="field">
             <span>Steps</span>
             <div class="range-wrap">
-              <input type="range" name="steps" id="steps" min="1" max="50" value="20">
-              <output for="steps" id="steps-output">20</output>
+              <input type="range" name="steps" id="steps" min="1" max="100" value="40">
+              <output for="steps" id="steps-output">40</output>
             </div>
           </label>
         </div>
@@ -66,7 +104,7 @@
         </div>
 
         <details class="advanced">
-          <summary>Advanced controls <span>Seed, guidance, negative prompt, image-to-image</span></summary>
+          <summary>Advanced controls <span>Seed, guidance, negative prompt</span></summary>
           <div class="advanced-body">
             <label class="field">
               <span>Negative prompt</span>
@@ -75,32 +113,15 @@
             <div class="form-grid three">
               <label class="field">
                 <span>Guidance</span>
-                <input type="number" name="guidance" value="4" min="0" max="20" step="0.1">
+                <input type="number" name="guidance" value="1" min="0" max="20" step="0.1">
               </label>
               <label class="field">
                 <span>Seed</span>
-                <input type="number" name="seed" id="seed" value="42" min="0" max="4294967295">
+                <input type="number" name="seed" id="seed" min="0" max="4294967295">
               </label>
               <label class="check-field">
                 <input type="checkbox" id="random-seed" checked>
                 <span>Randomize seed</span>
-              </label>
-            </div>
-            <div class="form-grid">
-              <label class="field file-field">
-                <span>Initial image <small>optional</small></span>
-                <input type="file" name="input_image" id="input-image" accept="image/*">
-                <span class="file-picker">
-                  <span class="file-button" id="file-label">Choose an image</span>
-                  <button class="clear-file" id="clear-input" type="button" hidden>Clear</button>
-                </span>
-              </label>
-              <label class="field" id="strength-field">
-                <span>Image strength</span>
-                <div class="range-wrap">
-                  <input type="range" name="image_strength" id="image-strength" min="0" max="1" step="0.05" value="0.75">
-                  <output for="image-strength" id="strength-output">0.75</output>
-                </div>
               </label>
             </div>
             <details class="expert">
@@ -116,7 +137,10 @@
 
         <div class="submit-row">
           <p id="form-message" role="status"></p>
-          <button class="primary-button" type="submit"><span>Queue generation</span><b>→</b></button>
+          <div class="submit-actions">
+            <button class="primary-button" type="submit"><span>Queue generation</span><b>→</b></button>
+            <button class="quiet-button" id="queue-keep-prompt" type="submit">Queue &amp; keep prompt</button>
+          </div>
         </div>
       </form>
     </section>
@@ -182,5 +206,6 @@
   </template>
 
   <script src="/app.js" defer></script>
+  <script src="/editor.js" defer></script>
 </body>
 </html>
